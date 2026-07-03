@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme static {
+  /* リベシティと同じシステムフォント優先 → Mac/Windowsで自然にくっきり表示 */
+  --font-sans: "ヒラギノ角ゴシック Pro", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ ProN W3", メイリオ, Meiryo, "Noto Sans JP", "Yu Gothic", sans-serif;
+
+  /* オレンジ（リベシティのCTAカラーを参考） */
+  --color-orange-50: #FFF8F0;
+  --color-orange-100: #FFEFD6;
+  --color-orange-200: #FFD9A8;
+  --color-orange-300: #FFBD6F;
+  --color-orange-400: #FF9D3A;
+  --color-orange-500: #F7931E;
+  --color-orange-600: #E07510;
+  --color-orange-700: #C05C0A;
+  --color-orange-800: #9A4508;
+  --color-orange-900: #7D3908;
+  --color-orange-950: #431C02;
+}
+
+/* 文字をくっきり表示（アンチエイリアシング） */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 日本語テキストの読みやすさ向上 */
+body {
+  letter-spacing: 0.02em;
+  line-height: 1.8;
+  color: #333333;
+  font-size: 16px;
+}
+
+/* 見出し系は字間を少し詰める */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  color: #1B2A4A;
+}
+
+/* 本文テキストは読みやすいグレー */
+p {
+  color: #444444;
+  line-height: 1.9;
+}
