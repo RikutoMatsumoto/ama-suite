@@ -157,11 +157,38 @@ watch(costPrice, recalculate, { immediate: true })
 const memo = reactive({ supplier: '', note: '' })
 const savingMemo = ref(false)
 
+const authStore = useAuthStore()
+
+// -------------------------------------------------------
+// 認証ヘッダーを作る共通処理
+// FirebaseのIDトークンを取得し「Bearer トークン」形式にする
+// サーバー側はこれを検証して本人を特定する
+// -------------------------------------------------------
+async function authHeaders() {
+  const token = await authStore.getIdToken()
+  return { Authorization: `Bearer ${token}` }
+}
+
+// ページを開いた時に保存済みメモを読み込む
+onMounted(async () => {
+  try {
+    const saved = await $fetch(`/api/products/${asin}/memo`, {
+      headers: await authHeaders(),
+    })
+    memo.supplier = saved.supplier ?? ''
+    memo.note = saved.note ?? ''
+  }
+  catch {
+    // 読み込み失敗時は空のまま（初回アクセス等）
+  }
+})
+
 async function saveMemo() {
   savingMemo.value = true
   try {
     await $fetch(`/api/products/${asin}/memo`, {
       method: 'POST',
+      headers: await authHeaders(),
       body: { supplier: memo.supplier, note: memo.note },
     })
   }

@@ -8,6 +8,16 @@
         </div>
       </template>
 
+      <!-- デモモードの案内（/login?demo=1 で表示される） -->
+      <UAlert
+        v-if="isDemoMode"
+        color="primary"
+        variant="subtle"
+        title="デモアカウントを入力済みです"
+        description="このまま「ログイン」ボタンを押すと、デモ画面をお試しいただけます。"
+        class="mb-4"
+      />
+
       <!-- エラーメッセージ表示 -->
       <!-- v-if：errorMessage が空でない時だけ表示される -->
       <UAlert
@@ -100,6 +110,18 @@ const schema = v.object({
 // state.email / state.password で各値にアクセスできる
 // -------------------------------------------------------
 const state = reactive({ email: '', password: '' })
+
+// -------------------------------------------------------
+// デモモード：LPの「デモを見る」から来た場合（/login?demo=1）、
+// デモアカウントを自動入力して、ログインボタンを押すだけにする
+// -------------------------------------------------------
+const route = useRoute()
+const isDemoMode = computed(() => route.query.demo === '1')
+
+if (isDemoMode.value) {
+  state.email = 'demo@amasuite.jp'
+  state.password = 'Demo12345'
+}
 
 // -------------------------------------------------------
 // ref：単一の値を管理

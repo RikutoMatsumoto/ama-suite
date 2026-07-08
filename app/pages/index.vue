@@ -48,8 +48,9 @@
               color="primary"
               class="font-black w-full sm:w-auto px-10 shadow-lg"
             />
+            <!-- デモ導線：ログイン画面にデモアカウントを自動入力した状態で開く -->
             <UButton
-              to="/dashboard"
+              to="/login?demo=1"
               label="デモを見る"
               size="xl"
               color="neutral"
@@ -185,6 +186,8 @@
               :color="plan.featured ? 'primary' : 'neutral'"
               :variant="plan.featured ? 'solid' : 'outline'"
               size="lg"
+              :loading="subscribingPlan === plan.id"
+              @click="subscribe(plan.id)"
             />
           </div>
         </div>
@@ -287,6 +290,7 @@ const features = [
 
 const plans = [
   {
+    id: 'starter',
     name: 'スターター',
     price: '¥3,000',
     description: '副業でせどりを始めたい方に',
@@ -299,6 +303,7 @@ const plans = [
     ],
   },
   {
+    id: 'standard',
     name: 'スタンダード',
     price: '¥5,000',
     description: '本格的にせどりで稼ぎたい方に',
@@ -314,6 +319,7 @@ const plans = [
     ],
   },
   {
+    id: 'pro',
     name: 'プロ',
     price: '¥9,800',
     description: '複数店舗・大規模運営向け',
@@ -326,6 +332,38 @@ const plans = [
     ],
   },
 ]
+
+// -------------------------------------------------------
+// プラン契約：Stripe Checkout（決済ページ）へ遷移する
+// 未ログインなら新規登録ページへ誘導
+// -------------------------------------------------------
+const authStore = useAuthStore()
+const subscribingPlan = ref<string | null>(null)
+
+async function subscribe(planId: string) {
+  // 未ログインならまずアカウント作成へ
+  if (!authStore.isLoggedIn) {
+    return navigateTo('/register')
+  }
+
+  subscribingPlan.value = planId
+  try {
+    const token = await authStore.getIdToken()
+    // サーバーにCheckout Session（Stripeの決済ページ）を作ってもらう
+    const res = await $fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { plan: planId },
+    })
+    // Stripeの決済ページへ移動（外部URLなので location を直接書き換え）
+    if (res.url) {
+      window.location.href = res.url
+    }
+  }
+  finally {
+    subscribingPlan.value = null
+  }
+}
 
 const faqs = [
   {

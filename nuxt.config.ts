@@ -8,6 +8,10 @@ export default defineNuxtConfig({
 
   // Rails APIのベースURL（環境変数で切り替え可能）
   runtimeConfig: {
+    // ここ（publicの外）に書いたものはサーバー側でしか見えない「秘密の設定」
+    // .env の NUXT_STRIPE_SECRET_KEY / NUXT_STRIPE_WEBHOOK_SECRET が自動で入る
+    stripeSecretKey: '',
+    stripeWebhookSecret: '',
     public: {
       apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3001',
       // Firebase設定（.envから読み込む）
