@@ -33,9 +33,9 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  routeRules: {
-    '/': { prerender: true }
-  },
+  // 注意: 以前は '/' を prerender: true（事前生成の静的ファイル）にしていたが、
+  // CDN/ブラウザに1時間キャッシュされ、デプロイ後に古いバージョンのLPから
+  // 遷移すると404になる問題があったため撤去（常にSSRで最新を返す）
 
   compatibilityDate: '2025-01-15',
 
