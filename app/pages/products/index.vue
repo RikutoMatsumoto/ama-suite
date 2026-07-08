@@ -6,20 +6,37 @@
       <UButton icon="i-lucide-plus" label="商品を追加" @click="showAddModal = true" />
     </div>
 
+    <!-- エラーメッセージ -->
+    <UAlert
+      v-if="errorMessage"
+      color="error"
+      variant="subtle"
+      :description="errorMessage"
+    />
+
     <!-- 商品テーブル -->
     <UCard>
-      <UTable :data="products" :columns="columns" :loading="loading" />
+      <UTable :data="filteredProducts" :columns="columns" :loading="loading" />
+      <p v-if="!loading && products.length === 0" class="text-center text-sm text-gray-400 py-8">
+        まだ商品が登録されていません。「商品を追加」から登録してみましょう。
+      </p>
     </UCard>
 
     <!-- 商品追加モーダル -->
     <UModal v-model:open="showAddModal" title="商品を追加">
       <template #body>
         <UForm :state="newProduct" class="space-y-4" @submit="addProduct">
-          <UFormField label="ASIN" name="asin" required>
+          <UFormField label="ASIN" name="asin" required help="Amazonの商品ページに記載されている10桁のID（例: B08N5WRWNW）">
             <UInput v-model="newProduct.asin" placeholder="例: B08N5WRWNW" class="w-full" />
           </UFormField>
+          <UFormField label="商品名" name="productName" required help="SP-API連携までは手入力（連携後は自動取得予定）">
+            <UInput v-model="newProduct.productName" placeholder="例: ワイヤレスイヤホン XYZ" class="w-full" />
+          </UFormField>
+          <UFormField label="現在価格 (円)" name="currentPrice" required>
+            <UInput v-model="newProduct.currentPrice" type="number" placeholder="3980" class="w-full" />
+          </UFormField>
           <UFormField label="仕入れ値 (円)" name="costPrice">
-            <UInput v-model="newProduct.costPrice" type="number" placeholder="0" class="w-full" />
+            <UInput v-model="newProduct.costPrice" type="number" placeholder="1500" class="w-full" />
           </UFormField>
           <div class="flex justify-end gap-2 pt-2">
             <UButton label="キャンセル" color="neutral" variant="ghost" @click="showAddModal = false" />
@@ -37,11 +54,14 @@ import type { TableColumn } from '@nuxt/ui'
 
 definePageMeta({ layout: 'default' })
 
+const authStore = useAuthStore()
+
 const search = ref('')
 const loading = ref(false)
 const showAddModal = ref(false)
 const adding = ref(false)
-const newProduct = reactive({ asin: '', costPrice: 0 })
+const errorMessage = ref('')
+const newProduct = reactive({ asin: '', productName: '', currentPrice: 0, costPrice: 0 })
 
 type Product = {
   asin: string
@@ -49,7 +69,99 @@ type Product = {
   currentPrice: number
   costPrice: number
   profit: number
-  rank: number
+}
+
+const products = ref<Product[]>([])
+
+// -------------------------------------------------------
+// 検索：入力に応じてクライアント側で絞り込む
+// computedなので、search か products が変わると自動で再計算される
+// -------------------------------------------------------
+const filteredProducts = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return products.value
+  return products.value.filter(p =>
+    p.asin.toLowerCase().includes(q) || p.productName.toLowerCase().includes(q),
+  )
+})
+
+// 認証ヘッダー（IDトークン）を作る共通処理
+async function authHeaders() {
+  const token = await authStore.getIdToken()
+  return { Authorization: `Bearer ${token}` }
+}
+
+// -------------------------------------------------------
+// 一覧取得：ページを開いた時に自分の商品を読み込む
+// -------------------------------------------------------
+async function loadProducts() {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const res = await $fetch<{ products: Product[] }>('/api/products', {
+      headers: await authHeaders(),
+    })
+    products.value = res.products
+  }
+  catch {
+    errorMessage.value = '商品一覧の取得に失敗しました'
+  }
+  finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadProducts)
+
+// -------------------------------------------------------
+// 商品追加：APIに登録して、一覧を読み直す
+// -------------------------------------------------------
+async function addProduct() {
+  adding.value = true
+  errorMessage.value = ''
+  try {
+    await $fetch('/api/products', {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: {
+        asin: newProduct.asin,
+        productName: newProduct.productName,
+        currentPrice: Number(newProduct.currentPrice),
+        costPrice: Number(newProduct.costPrice),
+      },
+    })
+    showAddModal.value = false
+    // 入力欄をリセット
+    Object.assign(newProduct, { asin: '', productName: '', currentPrice: 0, costPrice: 0 })
+    await loadProducts()
+  }
+  catch (err: unknown) {
+    const fetchError = err as { statusMessage?: string, data?: { statusMessage?: string } }
+    errorMessage.value = fetchError.data?.statusMessage ?? '商品の追加に失敗しました'
+    showAddModal.value = false
+  }
+  finally {
+    adding.value = false
+  }
+}
+
+// -------------------------------------------------------
+// 商品削除：確認してから削除し、一覧を読み直す
+// -------------------------------------------------------
+async function deleteProduct(asin: string, name: string) {
+  if (!confirm(`「${name}」を削除しますか？（メモも一緒に削除されます）`)) return
+
+  errorMessage.value = ''
+  try {
+    await $fetch(`/api/products/${asin}`, {
+      method: 'DELETE',
+      headers: await authHeaders(),
+    })
+    await loadProducts()
+  }
+  catch {
+    errorMessage.value = '削除に失敗しました'
+  }
 }
 
 const UButton = resolveComponent('UButton')
@@ -58,6 +170,10 @@ const columns: TableColumn<Product>[] = [
   {
     accessorKey: 'productName',
     header: '商品名',
+  },
+  {
+    accessorKey: 'asin',
+    header: 'ASIN',
   },
   {
     accessorKey: 'currentPrice',
@@ -80,37 +196,18 @@ const columns: TableColumn<Product>[] = [
     },
   },
   {
-    accessorKey: 'rank',
-    header: '売れ筋ランク',
-    cell: ({ row }) => `${row.getValue<number>('rank').toLocaleString()}位`,
-  },
-  {
     id: 'actions',
     header: '',
     cell: ({ row }) => h('div', { class: 'flex items-center gap-2' }, [
       h(UButton, { to: `/products/${row.original.asin}`, icon: 'i-lucide-bar-chart-2', size: 'xs', color: 'neutral', variant: 'ghost' }),
-      h(UButton, { icon: 'i-lucide-edit', size: 'xs', color: 'neutral', variant: 'ghost' }),
-      h(UButton, { icon: 'i-lucide-trash-2', size: 'xs', color: 'error', variant: 'ghost' }),
+      h(UButton, {
+        icon: 'i-lucide-trash-2',
+        size: 'xs',
+        color: 'error',
+        variant: 'ghost',
+        onClick: () => deleteProduct(row.original.asin, row.original.productName),
+      }),
     ]),
   },
 ]
-
-const products = ref<Product[]>([
-  {
-    asin: 'B08N5WRWNW',
-    productName: 'サンプル商品（API接続後に実データが表示されます）',
-    currentPrice: 3980,
-    costPrice: 1500,
-    profit: 1200,
-    rank: 1234,
-  },
-])
-
-async function addProduct() {
-  adding.value = true
-  // TODO: Rails API へ商品登録リクエスト
-  await new Promise(resolve => setTimeout(resolve, 800))
-  adding.value = false
-  showAddModal.value = false
-}
 </script>
