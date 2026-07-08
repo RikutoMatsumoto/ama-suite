@@ -61,11 +61,25 @@ export default defineEventHandler(async (event) => {
     createdAt: new Date().toISOString(),
   }
 
-  // ASINをドキュメントIDにする → 同じ商品の二重登録を自然に防げる
-  await adminFirestore()
-    .collection('users').doc(uid)
-    .collection('products').doc(asin)
-    .set(product)
+  // ASINをドキュメントIDにする
+  // create()は「既に存在する場合はエラー」になるので、
+  // 同じASINの二重登録による上書きを防げる（set()だと黙って上書きされる）
+  try {
+    await adminFirestore()
+      .collection('users').doc(uid)
+      .collection('products').doc(asin)
+      .create(product)
+  } catch (err: unknown) {
+    const firestoreError = err as { code?: number }
+    // code 6 = ALREADY_EXISTS（既に同じIDのドキュメントがある）
+    if (firestoreError.code === 6) {
+      throw createError({
+        statusCode: 409,
+        statusMessage: `このASIN（${asin}）は既に登録されています`,
+      })
+    }
+    throw err
+  }
 
   return { asin, ...product }
 })
