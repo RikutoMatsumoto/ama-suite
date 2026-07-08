@@ -120,19 +120,37 @@ const authStore = useAuthStore()
 
 interface Summary {
   monthlySales: number
+  monthlyProfit: number
   totalExpectedProfit: number
   productCount: number
   outOfStockCount: number
 }
 
+interface Order {
+  id: string
+  productName: string
+  quantity: number
+  total: number
+  profit: number
+  createdAt: string
+}
+
 const summary = ref<Summary | null>(null)
+const recentOrders = ref<Order[]>([])
 
 onMounted(async () => {
   try {
     const token = await authStore.getIdToken()
-    summary.value = await $fetch<Summary>('/api/dashboard/summary', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    const headers = { Authorization: `Bearer ${token}` }
+
+    // KPIと最近の注文を並行して取得
+    // Promise.all：複数の通信を同時に投げて、両方終わるのを待つ
+    const [summaryRes, ordersRes] = await Promise.all([
+      $fetch<Summary>('/api/dashboard/summary', { headers }),
+      $fetch<{ orders: Order[] }>('/api/orders', { headers }),
+    ])
+    summary.value = summaryRes
+    recentOrders.value = ordersRes.orders.slice(0, 5) // 直近5件だけ表示
   }
   catch {
     // 取得失敗時は0のまま表示
@@ -149,8 +167,8 @@ const kpiCards = computed(() => [
     iconColor: '#3B82F6',
   },
   {
-    label: '想定利益（登録商品）',
-    value: `¥${(summary.value?.totalExpectedProfit ?? 0).toLocaleString()}`,
+    label: '今月の利益',
+    value: `¥${(summary.value?.monthlyProfit ?? 0).toLocaleString()}`,
     change: 0,
     icon: 'i-lucide-circle-dollar-sign',
     bgColor: '#F0FDF4',
@@ -174,17 +192,36 @@ const kpiCards = computed(() => [
   },
 ])
 
-const alerts = [
-  { id: 1, type: '在庫切れ', color: 'error' as const, message: 'API接続後に表示されます' },
-]
+// 要対応リスト：在庫切れがあれば表示
+const alerts = computed(() => {
+  const count = summary.value?.outOfStockCount ?? 0
+  if (count === 0) return []
+  return [
+    { id: 1, type: '在庫切れ', color: 'error' as const, message: `${count}件の商品が在庫切れです。在庫管理から補充しましょう` },
+  ]
+})
+
+function formatDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 const orderColumns = [
-  { accessorKey: 'date', header: '日付' },
+  {
+    accessorKey: 'createdAt',
+    header: '日時',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => formatDate(row.getValue<string>('createdAt')),
+  },
   { accessorKey: 'productName', header: '商品名' },
-  { accessorKey: 'price', header: '売上' },
-  { accessorKey: 'profit', header: '利益' },
-  { accessorKey: 'status', header: 'ステータス' },
+  {
+    accessorKey: 'total',
+    header: '売上',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => `¥${row.getValue<number>('total').toLocaleString()}`,
+  },
+  {
+    accessorKey: 'profit',
+    header: '利益',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => `¥${row.getValue<number>('profit').toLocaleString()}`,
+  },
 ]
-
-const recentOrders: never[] = []
 </script>
