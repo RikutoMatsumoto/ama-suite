@@ -39,6 +39,12 @@ export default defineNuxtConfig({
 
   compatibilityDate: '2025-01-15',
 
+  experimental: {
+    // デプロイ直後、ブラウザが古いバージョンのページ部品（チャンク）を
+    // 読み込もうとして失敗した場合、即座にページを自動リロードして復旧する
+    emitRouteChunkError: 'automatic-immediate'
+  },
+
   eslint: {
     config: {
       stylistic: {
