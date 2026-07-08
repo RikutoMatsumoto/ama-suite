@@ -112,11 +112,32 @@
 definePageMeta({ layout: 'default' })
 
 // -------------------------------------------------------
-// useFetch：Nuxt標準のデータ取得関数
-// $fetchとの違いは「ページ表示と同時に自動で呼ばれる」こと
-// ここでは Nitro の server/api/dashboard/summary を呼んでいる
+// KPIデータの取得
+// 認証（IDトークン）が必要になったため、useFetchではなく
+// 「画面表示後にトークン付きで取得する」方式に変更
 // -------------------------------------------------------
-const { data: summary } = await useFetch('/api/dashboard/summary')
+const authStore = useAuthStore()
+
+interface Summary {
+  monthlySales: number
+  totalExpectedProfit: number
+  productCount: number
+  outOfStockCount: number
+}
+
+const summary = ref<Summary | null>(null)
+
+onMounted(async () => {
+  try {
+    const token = await authStore.getIdToken()
+    summary.value = await $fetch<Summary>('/api/dashboard/summary', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  }
+  catch {
+    // 取得失敗時は0のまま表示
+  }
+})
 
 const kpiCards = computed(() => [
   {
@@ -128,15 +149,15 @@ const kpiCards = computed(() => [
     iconColor: '#3B82F6',
   },
   {
-    label: '今月の利益',
-    value: `¥${(summary.value?.monthlyProfit ?? 0).toLocaleString()}`,
+    label: '想定利益（登録商品）',
+    value: `¥${(summary.value?.totalExpectedProfit ?? 0).toLocaleString()}`,
     change: 0,
     icon: 'i-lucide-circle-dollar-sign',
     bgColor: '#F0FDF4',
     iconColor: '#22C55E',
   },
   {
-    label: '在庫商品数',
+    label: '登録商品数',
     value: `${summary.value?.productCount ?? 0}件`,
     change: 0,
     icon: 'i-lucide-package',

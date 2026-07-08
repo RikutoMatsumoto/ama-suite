@@ -1,24 +1,34 @@
 // ============================================================
-// ダッシュボードKPI取得API
+// ダッシュボードKPI取得API（認可チェック付き・実データ集計）
 //
-// 【GETリクエストのAPI】
-// ファイル名の .get が「GETメソッドで呼ぶAPI」という意味。
-// フォルダを切って server/api/dashboard/summary.get.ts と置くと
-// URLは /api/dashboard/summary になる（フォルダ構造 = URL構造）。
+// 【変更履歴】
+// 旧: 固定のダミー数値を返すだけだった
+// 新: ログインユーザーの商品データをFirestoreから集計して返す
 //
-// 【今はダミーデータ、将来はRailsから取得】
-// 今は仮の数値を返しているが、将来はここで
-// Rails APIを呼び出して実データに差し替える想定。
-// フロント側は「どこからデータが来るか」を気にせず
-// 同じ /api/dashboard/summary を呼び続けられる。
+// 売上・注文はAmazon SP-API連携後に実装予定のため、
+// 現時点で集計できる「登録商品数」「想定利益の合計」を返す。
 // ============================================================
 
-export default defineEventHandler(() => {
+export default defineEventHandler(async (event) => {
+  const uid = await requireAuth(event)
+
+  // ログインユーザーの商品を全件取得
+  const snap = await adminFirestore()
+    .collection('users').doc(uid)
+    .collection('products')
+    .get()
+
+  // 想定利益の合計：各商品の profit を足し合わせる
+  let totalExpectedProfit = 0
+  snap.forEach((doc) => {
+    totalExpectedProfit += Number(doc.data().profit ?? 0)
+  })
+
   return {
-    monthlySales: 0,
-    monthlyProfit: 0,
-    productCount: 0,
-    outOfStockCount: 0,
+    monthlySales: 0, // SP-API連携後に実装
+    totalExpectedProfit, // 登録商品の想定利益合計
+    productCount: snap.size, // 登録商品数
+    outOfStockCount: 0, // 在庫管理実装後に集計
     updatedAt: new Date().toISOString(),
   }
 })
