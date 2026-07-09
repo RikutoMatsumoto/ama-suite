@@ -38,11 +38,24 @@
             <h3 class="font-bold text-base" style="color: #1B2A4A;">売上推移</h3>
             <p class="text-xs text-gray-400 mt-0.5">直近30日間</p>
           </div>
-          <UBadge label="更新: 1時間前" color="neutral" variant="subtle" size="sm" />
         </div>
-        <div class="h-64 flex flex-col items-center justify-center text-gray-300 gap-3">
-          <UIcon name="i-lucide-bar-chart-2" class="text-5xl" />
-          <p class="text-sm text-gray-400">APIと接続後にグラフが表示されます</p>
+        <div class="h-64 p-4">
+          <!--
+            ClientOnly：この中はブラウザでだけ描画する
+            （Chart.jsはブラウザ専用のため、サーバー側では動かさない）
+          -->
+          <ClientOnly>
+            <SalesChart
+              v-if="chart && hasOrders"
+              :labels="chart.labels"
+              :sales="chart.sales"
+              :profit="chart.profit"
+            />
+            <div v-else class="h-full flex flex-col items-center justify-center text-gray-300 gap-3">
+              <UIcon name="i-lucide-bar-chart-2" class="text-5xl" />
+              <p class="text-sm text-gray-400">注文を記録するとグラフが表示されます</p>
+            </div>
+          </ClientOnly>
         </div>
       </div>
 
@@ -135,22 +148,34 @@ interface Order {
   createdAt: string
 }
 
+interface ChartData {
+  labels: string[]
+  sales: number[]
+  profit: number[]
+}
+
 const summary = ref<Summary | null>(null)
 const recentOrders = ref<Order[]>([])
+const chart = ref<ChartData | null>(null)
+
+// グラフに描く意味のあるデータ（売上が1日でもある）が存在するか
+const hasOrders = computed(() => chart.value?.sales.some(v => v > 0) ?? false)
 
 onMounted(async () => {
   try {
     const token = await authStore.getIdToken()
     const headers = { Authorization: `Bearer ${token}` }
 
-    // KPIと最近の注文を並行して取得
-    // Promise.all：複数の通信を同時に投げて、両方終わるのを待つ
-    const [summaryRes, ordersRes] = await Promise.all([
+    // KPI・最近の注文・グラフデータを並行して取得
+    // Promise.all：複数の通信を同時に投げて、全部終わるのを待つ
+    const [summaryRes, ordersRes, chartRes] = await Promise.all([
       $fetch<Summary>('/api/dashboard/summary', { headers }),
       $fetch<{ orders: Order[] }>('/api/orders', { headers }),
+      $fetch<ChartData>('/api/dashboard/sales-chart', { headers }),
     ])
     summary.value = summaryRes
     recentOrders.value = ordersRes.orders.slice(0, 5) // 直近5件だけ表示
+    chart.value = chartRes
   }
   catch {
     // 取得失敗時は0のまま表示
