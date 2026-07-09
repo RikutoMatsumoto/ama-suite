@@ -53,7 +53,14 @@
           <div class="flex items-center justify-between">
             <h2 class="font-semibold flex items-center gap-2">
               <UIcon name="i-lucide-trending-up" />
-              価格履歴（Keepaデータ）
+              価格履歴
+              <UBadge
+                v-if="priceHistory?.source === 'mock'"
+                label="サンプルデータ"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+              />
             </h2>
             <div class="flex gap-1">
               <UButton
@@ -68,12 +75,17 @@
             </div>
           </div>
         </template>
-        <div class="h-64 flex items-center justify-center text-gray-400">
-          <div class="text-center">
-            <UIcon name="i-lucide-line-chart" class="text-5xl mb-2" />
-            <p class="text-sm">Keepa API接続後にグラフが表示されます</p>
-            <p class="text-xs text-gray-300 mt-1">90日・180日・1年の価格推移を確認できます</p>
-          </div>
+        <div class="h-64">
+          <ClientOnly>
+            <PriceChart
+              v-if="priceHistory"
+              :labels="priceHistory.labels"
+              :prices="priceHistory.prices"
+            />
+            <div v-else class="h-full flex items-center justify-center text-gray-400">
+              <p class="text-sm">読み込み中...</p>
+            </div>
+          </ClientOnly>
         </div>
       </UCard>
     </div>
@@ -114,6 +126,39 @@ const periods = [
   { label: '180日', value: 180 },
   { label: '1年', value: 365 },
 ]
+
+// -------------------------------------------------------
+// 価格履歴の取得
+// selectedPeriod（90/180/365）が変わるたびに再取得する
+// APIは現在モックデータを返す（将来Keepa APIに差し替え予定）
+// -------------------------------------------------------
+interface PriceHistory {
+  labels: string[]
+  prices: number[]
+  source: string
+}
+
+const priceHistory = ref<PriceHistory | null>(null)
+
+async function loadPriceHistory() {
+  try {
+    const token = await useAuthStore().getIdToken()
+    priceHistory.value = await $fetch<PriceHistory>(
+      `/api/products/${asin}/price-history`,
+      {
+        query: { days: selectedPeriod.value },
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    )
+  }
+  catch {
+    // 失敗時は「読み込み中...」のまま
+  }
+}
+
+// 期間切り替えのたびに再取得（immediateで初回も実行）
+watch(selectedPeriod, loadPriceHistory)
+onMounted(loadPriceHistory)
 
 // ダミーデータ（API接続後に置き換え）
 const product = reactive({
