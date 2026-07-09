@@ -1,28 +1,28 @@
 // ============================================================
-// 価格履歴取得API（Keepa連携版）
+// 価格履歴取得API（Keepa連携・複数系列版）
 //
 // GET /api/products/:asin/price-history?days=90
 //
-// 【データ取得の優先順位】
-// ① Firestoreキャッシュ（24時間以内に取得済みならそれを返す）
-//    → Keepaトークンの節約。何度開いても消費しない
-// ② Keepa API（キャッシュがない/古い時だけ呼ぶ。1商品=1トークン）
-// ③ モックデータ（Keepaが使えない・商品が見つからない時の保険）
-//    → ユーザーにエラー画面は絶対に見せない
+// 【返すデータ（Keepa本家のグラフに倣った3系列）】
+// ・newPrice … マーケットプレイス新品価格（メインの線）
+// ・amazon   … Amazon本体の販売価格（本体が売っていない期間は欠損）
+// ・rank     … 売れ筋ランキング（右軸・小さいほど売れている）
 //
-// 【Keepaのデータ形式メモ】
-// ・csv[0]=Amazon本体価格, csv[1]=マーケットプレイス新品価格
-// ・[時刻, 価格, 時刻, 価格, ...] の交互の配列
-// ・時刻は「Keepa時間（分）」: 実時間(ms) = (keepaTime + 21564000) * 60000
-// ・価格 -1 は「データなし」。日本(domain=5)は円の整数
+// 【取得の優先順位】
+// ① Firestoreキャッシュ（24時間）→ ② Keepa API → ③ モック
 // ============================================================
 
 const KEEPA_EPOCH_OFFSET = 21564000 // Keepa時間 → UNIX時間の変換オフセット（分）
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // キャッシュ有効期間：24時間
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const CACHE_VERSION = 2 // データ形式を変えたらここを上げる（古いキャッシュを無効化）
 
-interface DayPoint {
-  label: string
-  price: number | null
+type Daily = (number | null)[]
+
+interface KeepaSeries {
+  labels: string[]
+  newPrice: Daily
+  amazon: Daily
+  rank: Daily
 }
 
 export default defineEventHandler(async (event) => {
@@ -37,55 +37,55 @@ export default defineEventHandler(async (event) => {
   const days = [90, 180, 365].includes(Number(query.days)) ? Number(query.days) : 90
 
   // ---------------------------------------------------------
-  // ① キャッシュ確認（価格履歴はユーザー固有ではないので全体で共有）
+  // ① キャッシュ確認
   // ---------------------------------------------------------
   const cacheRef = adminFirestore().collection('keepaCache').doc(asin)
   const cacheDoc = await cacheRef.get()
 
-  let series: DayPoint[] | null = null
+  let series: KeepaSeries | null = null
 
   if (cacheDoc.exists) {
     const cached = cacheDoc.data()!
     const age = Date.now() - new Date(cached.updatedAt).getTime()
-    if (age < CACHE_TTL_MS) {
-      series = cached.series as DayPoint[]
+    if (age < CACHE_TTL_MS && cached.v === CACHE_VERSION) {
+      series = cached as unknown as KeepaSeries
     }
   }
 
   // ---------------------------------------------------------
-  // ② キャッシュがなければKeepaに問い合わせ
+  // ② Keepaに問い合わせ
   // ---------------------------------------------------------
   if (!series) {
     series = await fetchFromKeepa(asin)
     if (series) {
-      // 取得できたらキャッシュに保存（次回からトークン消費ゼロ）
       await cacheRef.set({
+        v: CACHE_VERSION,
         updatedAt: new Date().toISOString(),
-        series,
+        ...series,
       })
     }
   }
 
   if (series) {
-    const sliced = series.slice(-days)
     return {
-      labels: sliced.map(p => p.label),
-      prices: fillNulls(sliced.map(p => p.price)),
+      labels: series.labels.slice(-days),
+      newPrice: forwardFill(series.newPrice.slice(-days)),
+      amazon: series.amazon.slice(-days), // 欠損はそのまま（本体が売っていない期間）
+      rank: forwardFill(series.rank.slice(-days), true),
       source: 'keepa',
     }
   }
 
   // ---------------------------------------------------------
-  // ③ フォールバック：モックデータ（Keepa障害・商品未発見時の保険）
+  // ③ フォールバック：モック
   // ---------------------------------------------------------
   return generateMock(uid, asin, days)
 })
 
 // ============================================================
-// Keepa APIから365日分の日次価格系列を取得
-// 失敗時は null を返す（呼び出し側でモックに切り替え）
+// Keepa APIから365日分の日次3系列を取得（失敗時 null）
 // ============================================================
-async function fetchFromKeepa(asin: string): Promise<DayPoint[] | null> {
+async function fetchFromKeepa(asin: string): Promise<KeepaSeries | null> {
   const config = useRuntimeConfig()
   if (!config.keepaApiKey) return null
 
@@ -93,65 +93,82 @@ async function fetchFromKeepa(asin: string): Promise<DayPoint[] | null> {
     const res = await $fetch<{ products?: { csv?: (number[] | null)[] }[] }>(
       'https://api.keepa.com/product',
       {
-        query: {
-          key: config.keepaApiKey,
-          domain: 5, // 5 = Amazon.co.jp
-          asin,
-          history: 1,
-        },
+        query: { key: config.keepaApiKey, domain: 5, asin, history: 1 },
         timeout: 10_000,
       },
     )
 
     const csv = res.products?.[0]?.csv ?? []
-    // マーケットプレイス新品価格を優先、なければAmazon本体価格
-    const raw = (csv[1]?.length ? csv[1] : csv[0]) ?? null
-    if (!raw || raw.length < 4) return null
+    // Keepaのcsvインデックス: 0=Amazon本体, 1=マケプレ新品, 3=売れ筋ランキング
+    const newPrice = toDaily(csv[1])
+    const amazon = toDaily(csv[0])
+    const rank = toDaily(csv[3])
 
-    // [時刻, 価格, ...] の交互配列を時系列の点に変換
-    const points: { t: number, p: number }[] = []
-    for (let i = 0; i + 1 < raw.length; i += 2) {
-      const t = (raw[i]! + KEEPA_EPOCH_OFFSET) * 60_000
-      const p = raw[i + 1]!
-      if (p > 0) points.push({ t, p })
-    }
-    if (points.length === 0) return null
+    // メインの新品価格が無い商品はKeepaデータなしと判断
+    if (!newPrice) return null
 
-    // 365日分の「1日1点」に変換（その日までの最後の価格を採用 = forward fill）
-    const series: DayPoint[] = []
+    // ラベル（365日分の日付）
+    const labels: string[] = []
     const today = new Date()
     today.setHours(0, 0, 0, 0)
-
-    let idx = 0
-    let last: number | null = null
     for (let i = 364; i >= 0; i--) {
-      const dayStart = today.getTime() - i * 86_400_000
-      const dayEnd = dayStart + 86_400_000
-      while (idx < points.length && points[idx]!.t < dayEnd) {
-        last = points[idx]!.p
-        idx++
-      }
-      const d = new Date(dayStart)
-      series.push({ label: `${d.getMonth() + 1}/${d.getDate()}`, price: last })
+      const d = new Date(today.getTime() - i * 86_400_000)
+      labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
     }
-    return series
+
+    return {
+      labels,
+      newPrice,
+      amazon: amazon ?? new Array(365).fill(null),
+      rank: rank ?? new Array(365).fill(null),
+    }
   } catch {
-    return null // 通信失敗・トークン切れ等 → モックへフォールバック
+    return null
   }
 }
 
-// 先頭のnull（履歴開始前の期間）を最初の実価格で埋める
-function fillNulls(prices: (number | null)[]): number[] {
-  const firstReal = prices.find(p => p !== null) ?? 0
+// [時刻, 値, 時刻, 値, ...] の交互配列 → 365日分の日次配列に変換
+// その日の最後の値を採用。値がない日は null
+function toDaily(raw: number[] | null | undefined): Daily | null {
+  if (!raw || raw.length < 4) return null
+
+  const points: { t: number, v: number }[] = []
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    const t = (raw[i]! + KEEPA_EPOCH_OFFSET) * 60_000
+    const v = raw[i + 1]!
+    if (v > 0) points.push({ t, v })
+  }
+  if (points.length === 0) return null
+
+  const daily: Daily = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  let idx = 0
+  let last: number | null = null
+  for (let i = 364; i >= 0; i--) {
+    const dayEnd = today.getTime() - i * 86_400_000 + 86_400_000
+    while (idx < points.length && points[idx]!.t < dayEnd) {
+      last = points[idx]!.v
+      idx++
+    }
+    daily.push(last)
+  }
+  return daily
+}
+
+// null を直前の値で埋める（roundRank=true ならランキング用に整数化）
+function forwardFill(values: Daily, roundRank = false): Daily {
+  const firstReal = values.find(v => v !== null) ?? null
   let last = firstReal
-  return prices.map((p) => {
-    if (p !== null) last = p
-    return last
+  return values.map((v) => {
+    if (v !== null) last = v
+    return last !== null && roundRank ? Math.round(last) : last
   })
 }
 
 // ============================================================
-// モックデータ生成（Keepaが使えない時の保険。従来のロジック）
+// モックデータ生成（Keepaが使えない時の保険）
 // ============================================================
 async function generateMock(uid: string, asin: string, days: number) {
   const doc = await adminFirestore()
@@ -182,5 +199,11 @@ async function generateMock(uid: string, asin: string, days: number) {
   }
   if (doc.exists) prices[prices.length - 1] = basePrice
 
-  return { labels, prices, source: 'mock' }
+  return {
+    labels,
+    newPrice: prices,
+    amazon: new Array(days).fill(null),
+    rank: new Array(days).fill(null),
+    source: 'mock',
+  }
 }

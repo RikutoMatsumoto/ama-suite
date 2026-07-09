@@ -87,7 +87,9 @@
             <PriceChart
               v-if="priceHistory"
               :labels="priceHistory.labels"
-              :prices="priceHistory.prices"
+              :new-price="priceHistory.newPrice"
+              :amazon="priceHistory.amazon"
+              :rank="priceHistory.rank"
             />
             <div v-else class="h-full flex items-center justify-center text-gray-400">
               <p class="text-sm">読み込み中...</p>
@@ -141,7 +143,9 @@ const periods = [
 // -------------------------------------------------------
 interface PriceHistory {
   labels: string[]
-  prices: number[]
+  newPrice: (number | null)[]
+  amazon: (number | null)[]
+  rank: (number | null)[]
   source: string
 }
 

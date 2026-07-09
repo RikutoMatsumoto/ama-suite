@@ -2,9 +2,11 @@
   <div class="min-h-screen bg-gray-50 dark:bg-gray-950 flex">
     <!-- サイドバー（ネイビー） -->
     <aside class="w-64 flex flex-col" style="background-color: #1B2A4A;">
-      <!-- ロゴ -->
+      <!-- ロゴ（クリックでダッシュボードへ） -->
       <div class="h-16 flex items-center px-6 border-b border-white/10">
-        <span class="text-xl font-bold text-white">🛒 AmaSuite</span>
+        <NuxtLink to="/dashboard" class="text-xl font-bold text-white hover:opacity-80 transition-opacity">
+          🛒 AmaSuite
+        </NuxtLink>
       </div>
 
       <!-- ナビゲーション -->

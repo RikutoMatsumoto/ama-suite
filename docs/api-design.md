@@ -119,8 +119,17 @@ welcomeLogs/{uid}        ← Cloud Functions（ユーザー登録トリガー）
 
 エラーボディは `statusMessage` に日本語メッセージを格納し、フロントはこれをそのままユーザーに表示する。
 
-## 7. 今後の拡張予定
+## 7. 外部API連携：Keepa（実装済み）
+
+`GET /api/products/:asin/price-history` はKeepa APIと連携している。
+
+- 取得優先順位: **①Firestoreキャッシュ（24h）→ ②Keepa API → ③モックデータ**
+- キャッシュにより同一商品の再表示ではトークンを消費しない
+- Keepa障害・未知のASINでもエラー画面を出さずモックへフォールバック（`source`フィールドでフロントがバッジ表示を切替）
+- 外部APIキーは`runtimeConfig`（環境変数）で管理
+
+## 8. 今後の拡張予定
 
 - Amazon SP-API連携（商品情報・在庫・注文の自動取得 → 手入力APIを置き換え）
-- Keepa API連携（価格履歴グラフ）
+- 価格の定期スナップショット収集（Cloud Scheduler + Cloud Functions）
 - 契約プランに応じた機能制限（`billing/subscription` を参照したミドルウェア）
