@@ -55,7 +55,14 @@
               <UIcon name="i-lucide-trending-up" />
               価格履歴
               <UBadge
-                v-if="priceHistory?.source === 'mock'"
+                v-if="priceHistory?.source === 'keepa'"
+                label="Keepaデータ"
+                color="success"
+                variant="subtle"
+                size="sm"
+              />
+              <UBadge
+                v-else-if="priceHistory?.source === 'mock'"
                 label="サンプルデータ"
                 color="neutral"
                 variant="subtle"

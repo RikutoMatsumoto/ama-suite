@@ -1,18 +1,29 @@
 // ============================================================
-// 価格履歴取得API（現在はモックデータ／将来Keepa APIに差し替え）
+// 価格履歴取得API（Keepa連携版）
 //
 // GET /api/products/:asin/price-history?days=90
 //
-// 【設計意図】
-// フロントはこのAPIの形（labels/prices）だけに依存する。
-// 将来Keepa連携する時は、この中身をKeepa呼び出しに
-// 差し替えるだけで、フロントは一切変更不要になる。
+// 【データ取得の優先順位】
+// ① Firestoreキャッシュ（24時間以内に取得済みならそれを返す）
+//    → Keepaトークンの節約。何度開いても消費しない
+// ② Keepa API（キャッシュがない/古い時だけ呼ぶ。1商品=1トークン）
+// ③ モックデータ（Keepaが使えない・商品が見つからない時の保険）
+//    → ユーザーにエラー画面は絶対に見せない
 //
-// 【モックの作り方】
-// ASINの文字から数値の種（シード）を作り、それを元に
-// 疑似ランダムな価格変動を生成する。
-// → 同じASINなら何度開いても同じグラフになる（デモとして自然）
+// 【Keepaのデータ形式メモ】
+// ・csv[0]=Amazon本体価格, csv[1]=マーケットプレイス新品価格
+// ・[時刻, 価格, 時刻, 価格, ...] の交互の配列
+// ・時刻は「Keepa時間（分）」: 実時間(ms) = (keepaTime + 21564000) * 60000
+// ・価格 -1 は「データなし」。日本(domain=5)は円の整数
 // ============================================================
+
+const KEEPA_EPOCH_OFFSET = 21564000 // Keepa時間 → UNIX時間の変換オフセット（分）
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // キャッシュ有効期間：24時間
+
+interface DayPoint {
+  label: string
+  price: number | null
+}
 
 export default defineEventHandler(async (event) => {
   const uid = await requireAuth(event)
@@ -22,54 +33,154 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'ASINが指定されていません' })
   }
 
-  // 期間（90 / 180 / 365日）。不正値は90に丸める
   const query = getQuery(event)
   const days = [90, 180, 365].includes(Number(query.days)) ? Number(query.days) : 90
 
-  // 登録済み商品なら現在価格を基準にする（未登録なら3980円を基準）
+  // ---------------------------------------------------------
+  // ① キャッシュ確認（価格履歴はユーザー固有ではないので全体で共有）
+  // ---------------------------------------------------------
+  const cacheRef = adminFirestore().collection('keepaCache').doc(asin)
+  const cacheDoc = await cacheRef.get()
+
+  let series: DayPoint[] | null = null
+
+  if (cacheDoc.exists) {
+    const cached = cacheDoc.data()!
+    const age = Date.now() - new Date(cached.updatedAt).getTime()
+    if (age < CACHE_TTL_MS) {
+      series = cached.series as DayPoint[]
+    }
+  }
+
+  // ---------------------------------------------------------
+  // ② キャッシュがなければKeepaに問い合わせ
+  // ---------------------------------------------------------
+  if (!series) {
+    series = await fetchFromKeepa(asin)
+    if (series) {
+      // 取得できたらキャッシュに保存（次回からトークン消費ゼロ）
+      await cacheRef.set({
+        updatedAt: new Date().toISOString(),
+        series,
+      })
+    }
+  }
+
+  if (series) {
+    const sliced = series.slice(-days)
+    return {
+      labels: sliced.map(p => p.label),
+      prices: fillNulls(sliced.map(p => p.price)),
+      source: 'keepa',
+    }
+  }
+
+  // ---------------------------------------------------------
+  // ③ フォールバック：モックデータ（Keepa障害・商品未発見時の保険）
+  // ---------------------------------------------------------
+  return generateMock(uid, asin, days)
+})
+
+// ============================================================
+// Keepa APIから365日分の日次価格系列を取得
+// 失敗時は null を返す（呼び出し側でモックに切り替え）
+// ============================================================
+async function fetchFromKeepa(asin: string): Promise<DayPoint[] | null> {
+  const config = useRuntimeConfig()
+  if (!config.keepaApiKey) return null
+
+  try {
+    const res = await $fetch<{ products?: { csv?: (number[] | null)[] }[] }>(
+      'https://api.keepa.com/product',
+      {
+        query: {
+          key: config.keepaApiKey,
+          domain: 5, // 5 = Amazon.co.jp
+          asin,
+          history: 1,
+        },
+        timeout: 10_000,
+      },
+    )
+
+    const csv = res.products?.[0]?.csv ?? []
+    // マーケットプレイス新品価格を優先、なければAmazon本体価格
+    const raw = (csv[1]?.length ? csv[1] : csv[0]) ?? null
+    if (!raw || raw.length < 4) return null
+
+    // [時刻, 価格, ...] の交互配列を時系列の点に変換
+    const points: { t: number, p: number }[] = []
+    for (let i = 0; i + 1 < raw.length; i += 2) {
+      const t = (raw[i]! + KEEPA_EPOCH_OFFSET) * 60_000
+      const p = raw[i + 1]!
+      if (p > 0) points.push({ t, p })
+    }
+    if (points.length === 0) return null
+
+    // 365日分の「1日1点」に変換（その日までの最後の価格を採用 = forward fill）
+    const series: DayPoint[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    let idx = 0
+    let last: number | null = null
+    for (let i = 364; i >= 0; i--) {
+      const dayStart = today.getTime() - i * 86_400_000
+      const dayEnd = dayStart + 86_400_000
+      while (idx < points.length && points[idx]!.t < dayEnd) {
+        last = points[idx]!.p
+        idx++
+      }
+      const d = new Date(dayStart)
+      series.push({ label: `${d.getMonth() + 1}/${d.getDate()}`, price: last })
+    }
+    return series
+  } catch {
+    return null // 通信失敗・トークン切れ等 → モックへフォールバック
+  }
+}
+
+// 先頭のnull（履歴開始前の期間）を最初の実価格で埋める
+function fillNulls(prices: (number | null)[]): number[] {
+  const firstReal = prices.find(p => p !== null) ?? 0
+  let last = firstReal
+  return prices.map((p) => {
+    if (p !== null) last = p
+    return last
+  })
+}
+
+// ============================================================
+// モックデータ生成（Keepaが使えない時の保険。従来のロジック）
+// ============================================================
+async function generateMock(uid: string, asin: string, days: number) {
   const doc = await adminFirestore()
     .collection('users').doc(uid)
     .collection('products').doc(asin)
     .get()
   const basePrice = Number(doc.data()?.currentPrice ?? 3980)
 
-  // --- ASINから決定的な疑似乱数を作る ---
-  // 文字コードを合計してシードにする → 同じASINは常に同じ変動パターン
   let seed = 0
   for (const ch of asin) seed = (seed * 31 + ch.charCodeAt(0)) % 233280
-
-  // 線形合同法：シンプルな疑似乱数生成器（0〜1を返す）
   function random() {
     seed = (seed * 9301 + 49297) % 233280
     return seed / 233280
   }
 
-  // --- ランダムウォークで価格系列を生成 ---
   const labels: string[] = []
   const prices: number[] = []
   const now = new Date()
-
-  let price = basePrice * (0.9 + random() * 0.2) // 開始価格は基準の±10%
+  let price = basePrice * (0.9 + random() * 0.2)
 
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
     labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
-
-    // 日々±2%くらい上下しつつ、基準価格に緩やかに引き戻す
     const drift = (basePrice - price) * 0.02
     price = price * (0.98 + random() * 0.04) + drift
-    // たまにセール（5%の確率で10%オフ）
     if (random() < 0.05) price = price * 0.9
-
     prices.push(Math.round(price))
   }
-
-  // 最終日は登録した現在価格に合わせる（画面上の整合性のため）
   if (doc.exists) prices[prices.length - 1] = basePrice
 
-  return {
-    labels,
-    prices,
-    source: 'mock', // フロントで「サンプルデータ」表示に使う。Keepa連携後は 'keepa' に
-  }
-})
+  return { labels, prices, source: 'mock' }
+}

@@ -12,6 +12,7 @@ export default defineNuxtConfig({
     // .env の NUXT_STRIPE_SECRET_KEY / NUXT_STRIPE_WEBHOOK_SECRET が自動で入る
     stripeSecretKey: '',
     stripeWebhookSecret: '',
+    keepaApiKey: '',
     public: {
       apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3001',
       // Firebase設定（.envから読み込む）
