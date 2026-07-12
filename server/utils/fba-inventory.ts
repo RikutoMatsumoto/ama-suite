@@ -46,6 +46,10 @@ export interface FbaItem {
 
 export interface FbaInventoryData {
   items: FbaItem[] // 在庫あり or 納品中のSKUのみ
+  // 全SKU（在庫0含む）のSKU→ASIN対応表。
+  // 入金明細（Finances API）はSKUしか持っていないので、
+  // 商品（ASINキー）と紐付けて仕入れ値を引くために使う
+  skuAsinMap: Record<string, string>
   summary: { allSkus: number, activeSkus: number, totalUnits: number, inboundUnits: number }
   updatedAt: string
 }
@@ -63,7 +67,8 @@ export async function fetchFbaInventory(uid: string, forceRefresh = false): Prom
     const cached = await cacheRef.get()
     if (cached.exists) {
       const data = cached.data()!
-      if (Date.now() - new Date(data.updatedAt).getTime() < CACHE_TTL_MS) {
+      // skuAsinMapが無い古い形式のキャッシュは使わない（形式変更時の安全弁）
+      if (Date.now() - new Date(data.updatedAt).getTime() < CACHE_TTL_MS && data.skuAsinMap) {
         return data as FbaInventoryData
       }
     }
@@ -117,6 +122,12 @@ export async function fetchFbaInventory(uid: string, forceRefresh = false): Prom
     .filter(i => i.total > 0 || i.inbound > 0)
     .sort((a, b) => b.total - a.total) // 在庫が多い順
 
+  // 全SKU（在庫0の売り切れ済み含む）のSKU→ASIN対応表
+  const skuAsinMap: Record<string, string> = {}
+  for (const s of summaries) {
+    if (s.sellerSku && s.asin) skuAsinMap[s.sellerSku] = s.asin
+  }
+
   const summary = {
     allSkus: summaries.length, // 直近1年で変動のあったSKU数
     activeSkus: items.length,
@@ -124,7 +135,7 @@ export async function fetchFbaInventory(uid: string, forceRefresh = false): Prom
     inboundUnits: items.reduce((sum, i) => sum + i.inbound, 0),
   }
 
-  const result: FbaInventoryData = { items, summary, updatedAt: new Date().toISOString() }
+  const result: FbaInventoryData = { items, skuAsinMap, summary, updatedAt: new Date().toISOString() }
 
   // ---------------------------------------------------------
   // ④ キャッシュ保存

@@ -1,10 +1,11 @@
 // ============================================================
 // ダッシュボードKPI取得API（認可チェック付き・実データ集計）
 //
-// 【売上の出どころは2系統】
-// ・オーナーアカウント … SP-APIのAmazon実注文から集計（source: 'amazon'）
-//   利益は手数料連携（財務会計ロール）が未実装のため null を返す
-//   （手動記録の想定利益と混ぜて嘘の数字を出さないための判断）
+// 【売上・利益の出どころは2系統】
+// ・オーナーアカウント … SP-APIの実データから集計（source: 'amazon'）
+//   売上 = Orders API（注文日ベース）
+//   利益 = Finances API（入金確定ベース）− 仕入れ値
+//          仕入れ値はSKU→ASIN→商品のcostPriceで紐付け（未入力なら0円扱い）
 // ・それ以外（デモ等） … 手動記録の注文から集計（source: 'manual'）
 // ============================================================
 
@@ -45,9 +46,37 @@ export default defineEventHandler(async (event) => {
       .filter(o => o.status !== 'Canceled' && o.purchaseDate >= monthStart)
       .reduce((sum, o) => sum + (o.total ?? 0), 0)
 
+    // ---------------------------------------------------
+    // 今月の実利益 = 入金確定額（実手数料引き後）− 仕入れ値
+    // ---------------------------------------------------
+    const [finances, inventory] = await Promise.all([
+      fetchAmazonFinances(uid),
+      fetchFbaInventory(uid), // SKU→ASINの対応表に使う
+    ])
+
+    // 仕入れ値の対応表（ASIN→costPrice）を商品データから作る
+    const costByAsin = new Map<string, number>()
+    snap.forEach((doc) => {
+      costByAsin.set(doc.id, Number(doc.data().costPrice ?? 0))
+    })
+
+    let monthlyProfit = 0
+    for (const item of finances.items) {
+      if (item.postedDate < monthStart) continue
+      // charges（買い手支払額）+ fees（手数料・マイナス値）= 実入金額
+      let profit = item.charges + item.fees
+      // 仕入れ値を引く（返金イベントは商品が戻ってくるので仕入れ値は引かない）
+      if (!item.isRefund) {
+        const asin = inventory.skuAsinMap[item.sku]
+        const cost = asin ? (costByAsin.get(asin) ?? 0) : 0
+        profit -= cost * item.quantity
+      }
+      monthlyProfit += profit
+    }
+
     return {
       monthlySales,
-      monthlyProfit: null, // 手数料連携（財務会計ロール）までは算出しない
+      monthlyProfit: Math.round(monthlyProfit),
       totalExpectedProfit,
       productCount: snap.size,
       outOfStockCount,
