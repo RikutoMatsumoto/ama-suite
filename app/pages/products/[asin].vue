@@ -11,7 +11,8 @@
     </div>
 
     <!-- メインコンテンツ -->
-    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    <!-- items-start: 左右のカラムの高さを揃えず、それぞれ上から詰めて配置 -->
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
       <!-- 利益計算 -->
       <UCard class="lg:col-span-2">
         <template #header>
@@ -47,13 +48,14 @@
         </div>
       </UCard>
 
-      <!-- 価格グラフ -->
+      <!-- グラフ3枚を1枚のカードに縦積み（Keepa風にピッタリ寄せる。縦ラインも揃う）
+           各グラフの凡例がタイトル代わりなので、中間の見出しは置かない -->
       <UCard class="lg:col-span-3">
         <template #header>
           <div class="flex items-center justify-between">
             <h2 class="font-semibold flex items-center gap-2">
               <UIcon name="i-lucide-trending-up" />
-              価格履歴
+              価格・ランキング推移
               <UBadge
                 v-if="priceHistory?.source === 'keepa'"
                 label="Keepaデータ"
@@ -70,6 +72,7 @@
               />
             </h2>
             <div class="flex gap-1">
+              <!-- プランの閲覧上限を超える期間はロック（例: スターターは90日まで） -->
               <UButton
                 v-for="period in periods"
                 :key="period.value"
@@ -77,25 +80,57 @@
                 size="xs"
                 :variant="selectedPeriod === period.value ? 'solid' : 'ghost'"
                 color="neutral"
+                :disabled="isPeriodLocked(period.value)"
+                :icon="isPeriodLocked(period.value) ? 'i-lucide-lock' : undefined"
+                :title="isPeriodLocked(period.value) ? 'スタンダードプランで1年分のグラフが見られます' : undefined"
                 @click="selectedPeriod = period.value"
               />
             </div>
           </div>
         </template>
-        <div class="h-64">
-          <ClientOnly>
-            <PriceChart
-              v-if="priceHistory"
-              :labels="priceHistory.labels"
-              :new-price="priceHistory.newPrice"
-              :amazon="priceHistory.amazon"
-              :rank="priceHistory.rank"
-            />
-            <div v-else class="h-full flex items-center justify-center text-gray-400">
-              <p class="text-sm">読み込み中...</p>
+        <ClientOnly>
+          <div v-if="priceHistory">
+            <!-- 価格グラフ（日付ラベルは一番下のグラフだけに表示） -->
+            <div class="h-60">
+              <PriceChart
+                :labels="priceHistory.labels"
+                :new-price="priceHistory.newPrice"
+                :amazon="priceHistory.amazon"
+                :buy-box="priceHistory.buyBox"
+                :rank="priceHistory.rank"
+                :hide-dates="hasSubRank || hasSellerCount || hasRating"
+              />
             </div>
-          </ClientOnly>
-        </div>
+            <!-- カテゴリ別ランキング -->
+            <div v-if="hasSubRank" class="h-36">
+              <CategoryRankChart
+                :labels="priceHistory.labels"
+                :sub-rank="priceHistory.subRank"
+                :sub-rank-label="priceHistory.subRankLabel"
+                :hide-dates="hasSellerCount || hasRating"
+              />
+            </div>
+            <!-- 新品出品者数 -->
+            <div v-if="hasSellerCount" class="h-36">
+              <SellerCountChart
+                :labels="priceHistory.labels"
+                :seller-count="priceHistory.sellerCount"
+                :hide-dates="hasRating"
+              />
+            </div>
+            <!-- 評価・レビュー数 -->
+            <div v-if="hasRating" class="h-36">
+              <RatingChart
+                :labels="priceHistory.labels"
+                :rating="priceHistory.rating"
+                :review-count="priceHistory.reviewCount"
+              />
+            </div>
+          </div>
+          <div v-else class="h-64 flex items-center justify-center text-gray-400">
+            <p class="text-sm">読み込み中...</p>
+          </div>
+        </ClientOnly>
       </UCard>
     </div>
 
@@ -137,6 +172,19 @@ const periods = [
 ]
 
 // -------------------------------------------------------
+// プラン別の閲覧期間制限
+// サーバー側でも同じ制限をかけているので、ここは「案内」の役割
+// （ボタンをロックして、なぜ使えないかをツールチップで伝える）
+// -------------------------------------------------------
+const { planInfo, loadPlan } = usePlan()
+onMounted(loadPlan)
+
+function isPeriodLocked(days: number): boolean {
+  if (!planInfo.value) return false // プラン情報の取得前はロックしない
+  return days > planInfo.value.maxHistoryDays
+}
+
+// -------------------------------------------------------
 // 価格履歴の取得
 // selectedPeriod（90/180/365）が変わるたびに再取得する
 // APIは現在モックデータを返す（将来Keepa APIに差し替え予定）
@@ -145,11 +193,31 @@ interface PriceHistory {
   labels: string[]
   newPrice: (number | null)[]
   amazon: (number | null)[]
+  buyBox: (number | null)[]
   rank: (number | null)[]
+  subRank: (number | null)[]
+  subRankLabel: string
+  sellerCount: (number | null)[]
+  rating: (number | null)[]
+  reviewCount: (number | null)[]
   source: string
 }
 
 const priceHistory = ref<PriceHistory | null>(null)
+
+// 出品者数・カテゴリ別ランキングはデータが1件でもあればグラフを出す
+// （無い商品はカードごと非表示）
+const hasSellerCount = computed(() =>
+  priceHistory.value?.sellerCount?.some(v => v !== null) ?? false,
+)
+const hasSubRank = computed(() =>
+  priceHistory.value?.subRank?.some(v => v !== null) ?? false,
+)
+// 評価かレビュー数のどちらかがあれば評価グラフを出す
+const hasRating = computed(() =>
+  (priceHistory.value?.rating?.some(v => v !== null) ?? false)
+  || (priceHistory.value?.reviewCount?.some(v => v !== null) ?? false),
+)
 
 async function loadPriceHistory() {
   try {
