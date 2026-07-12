@@ -3,7 +3,19 @@
     <!-- 操作バー -->
     <div class="flex items-center justify-between gap-4">
       <UInput v-model="search" icon="i-lucide-search" placeholder="ASIN・商品名で検索" class="max-w-sm" />
-      <UButton icon="i-lucide-plus" label="商品を追加" @click="showAddModal = true" />
+      <div class="flex items-center gap-3">
+        <!-- 登録上限のあるプランは「今何件 / 上限」を表示 -->
+        <span v-if="planInfo?.maxProducts" class="text-sm text-gray-500">
+          登録数 {{ products.length }} / {{ planInfo.maxProducts }}件
+        </span>
+        <UButton
+          icon="i-lucide-plus"
+          label="商品を追加"
+          :disabled="isAtLimit"
+          :title="isAtLimit ? 'スタンダードプランなら無制限に登録できます' : undefined"
+          @click="showAddModal = true"
+        />
+      </div>
     </div>
 
     <!-- エラーメッセージ -->
@@ -72,6 +84,17 @@ type Product = {
 }
 
 const products = ref<Product[]>([])
+
+// -------------------------------------------------------
+// プラン別の登録上限（本当の制限はサーバー側。ここは案内役）
+// -------------------------------------------------------
+const { planInfo, loadPlan } = usePlan()
+onMounted(loadPlan)
+
+const isAtLimit = computed(() => {
+  const max = planInfo.value?.maxProducts
+  return max !== null && max !== undefined && products.value.length >= max
+})
 
 // -------------------------------------------------------
 // 検索：入力に応じてクライアント側で絞り込む

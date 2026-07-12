@@ -25,6 +25,27 @@ interface ProductBody {
 
 export default defineEventHandler(async (event) => {
   const uid = await requireAuth(event)
+
+  // --- プラン別の登録上限チェック（スターター: 50件まで） ---
+  // フロントの表示だけでなくサーバー側でも必ずチェックする
+  // （APIを直接叩かれても制限を回避できないように）
+  const plan = await resolvePlan(uid)
+  if (plan.maxProducts !== null) {
+    // count()は件数だけを取得する集計クエリ（全件読むより速くて安い）
+    const countSnap = await adminFirestore()
+      .collection('users').doc(uid)
+      .collection('products')
+      .count()
+      .get()
+
+    if (countSnap.data().count >= plan.maxProducts) {
+      throw createError({
+        statusCode: 403,
+        statusMessage: `${plan.label}の商品登録は${plan.maxProducts}件までです。スタンダードプランなら無制限に登録できます`,
+      })
+    }
+  }
+
   const body = await readBody<ProductBody>(event)
 
   // --- バリデーション ---
