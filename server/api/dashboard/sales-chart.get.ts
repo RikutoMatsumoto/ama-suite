@@ -21,11 +21,24 @@ export default defineEventHandler(async (event) => {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)
 
   // -------------------------------------------------------
-  // オーナーはAmazon実注文から日別売上を集計
-  // （利益は手数料連携までは出せないので null を返す）
+  // オーナーはAmazon実データから集計
+  // ・売上 = Orders API（注文日ベース）
+  // ・利益 = Finances API（入金確定日ベース）− 仕入れ値
+  //   ※売上と利益で日付の基準が違う（発送時に確定するため数日遅れる）のが正常
   // -------------------------------------------------------
   if (await isSpApiOwner(uid)) {
-    const amazon = await fetchAmazonOrders(uid)
+    const [amazon, finances, inventory, productsSnap] = await Promise.all([
+      fetchAmazonOrders(uid),
+      fetchAmazonFinances(uid),
+      fetchFbaInventory(uid), // SKU→ASINの対応表に使う
+      adminFirestore().collection('users').doc(uid).collection('products').get(),
+    ])
+
+    // 仕入れ値の対応表（ASIN→costPrice）
+    const costByAsin = new Map<string, number>()
+    productsSnap.forEach((doc) => {
+      costByAsin.set(doc.id, Number(doc.data().costPrice ?? 0))
+    })
 
     const salesByDay = new Map<string, number>()
     for (const order of amazon.orders) {
@@ -35,16 +48,31 @@ export default defineEventHandler(async (event) => {
       salesByDay.set(key, (salesByDay.get(key) ?? 0) + order.total)
     }
 
+    // 日別の実利益（入金額 − 仕入れ値）
+    const profitByDay = new Map<string, number>()
+    for (const item of finances.items) {
+      const d = new Date(item.postedDate)
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+      let profit = item.charges + item.fees
+      if (!item.isRefund) {
+        const asin = inventory.skuAsinMap[item.sku]
+        profit -= (asin ? (costByAsin.get(asin) ?? 0) : 0) * item.quantity
+      }
+      profitByDay.set(key, (profitByDay.get(key) ?? 0) + profit)
+    }
+
     const labels: string[] = []
     const sales: number[] = []
+    const profit: number[] = []
     for (let i = 0; i < 30; i++) {
       const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
       labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
       sales.push(salesByDay.get(key) ?? 0)
+      profit.push(Math.round(profitByDay.get(key) ?? 0))
     }
 
-    return { labels, sales, profit: null, source: 'amazon' }
+    return { labels, sales, profit, source: 'amazon' }
   }
 
   const snap = await adminFirestore()

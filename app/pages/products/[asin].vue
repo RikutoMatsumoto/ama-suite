@@ -7,7 +7,8 @@
         <h1 class="text-xl font-bold">{{ product.productName }}</h1>
         <p class="text-sm text-gray-500 mt-1">ASIN: {{ asin }}</p>
       </div>
-      <UBadge :label="`ランク: ${product.rank.toLocaleString()}位`" color="neutral" />
+      <!-- ランキングはKeepaの価格履歴データの最新値から表示 -->
+      <UBadge v-if="latestRank" :label="`ランク: ${latestRank.toLocaleString()}位`" color="neutral" />
     </div>
 
     <!-- メインコンテンツ -->
@@ -239,14 +240,41 @@ async function loadPriceHistory() {
 watch(selectedPeriod, loadPriceHistory)
 onMounted(loadPriceHistory)
 
-// ダミーデータ（API接続後に置き換え）
+// 商品情報（登録済みの実データをAPIから読み込む）
 const product = reactive({
-  productName: 'サンプル商品（API接続後に実データが表示されます）',
-  currentPrice: 3980,
-  rank: 12345,
+  productName: '読み込み中...',
+  currentPrice: 0,
 })
 
-const costPrice = ref(1500)
+const costPrice = ref(0)
+
+// ランキングバッジ：Keepaの価格履歴データの最新値を使う
+const latestRank = computed(() => {
+  const ranks = priceHistory.value?.rank
+  if (!ranks) return null
+  for (let i = ranks.length - 1; i >= 0; i--) {
+    if (ranks[i] !== null) return ranks[i]
+  }
+  return null
+})
+
+// ページを開いた時に商品データを読み込む
+onMounted(async () => {
+  try {
+    const saved = await $fetch<{ productName: string, currentPrice: number, costPrice: number }>(
+      `/api/products/${asin}`,
+      { headers: await authHeaders() },
+    )
+    product.productName = saved.productName
+    product.currentPrice = saved.currentPrice
+    costPrice.value = saved.costPrice ?? 0
+    await recalculate() // 実際の価格で利益計算をやり直す
+  }
+  catch {
+    // 未登録のASINを直接開いた場合など
+    product.productName = '（未登録の商品）'
+  }
+})
 
 // -------------------------------------------------------
 // 利益計算：Nitro の server/api/profit-calculator に問い合わせる
@@ -259,6 +287,10 @@ const profitRate = ref(0)
 const calculating = ref(false)
 
 async function recalculate() {
+  // 商品データの読み込み前（価格0円）は計算しない
+  // （利益計算APIは「販売価格は正の数」を要求するため400になる）
+  if (!product.currentPrice || product.currentPrice <= 0) return
+
   calculating.value = true
   try {
     const result = await $fetch('/api/profit-calculator', {
