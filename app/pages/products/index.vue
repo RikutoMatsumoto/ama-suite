@@ -230,6 +230,46 @@ async function addProduct() {
 }
 
 // -------------------------------------------------------
+// 仕入れ値のインライン編集
+// セルをクリック→入力欄に変わる→Enterかフォーカスを外すと保存。
+// 保存はPATCH APIに任せ、利益もサーバー側で再計算される
+// -------------------------------------------------------
+const editingAsin = ref<string | null>(null) // いま編集中の商品（nullなら編集していない）
+const editingValue = ref(0)
+
+function startEditCost(product: Product) {
+  editingAsin.value = product.asin
+  editingValue.value = product.costPrice
+  // 次の描画で入力欄が出てから自動でフォーカスする
+  nextTick(() => {
+    const input = document.getElementById(`cost-input-${product.asin}`) as HTMLInputElement | null
+    input?.focus()
+    input?.select()
+  })
+}
+
+async function saveCost(product: Product) {
+  if (editingAsin.value !== product.asin) return
+  editingAsin.value = null
+
+  const newCost = Number(editingValue.value)
+  if (!Number.isFinite(newCost) || newCost < 0 || newCost === product.costPrice) return
+
+  errorMessage.value = ''
+  try {
+    await $fetch(`/api/products/${product.asin}`, {
+      method: 'PATCH',
+      headers: await authHeaders(),
+      body: { costPrice: newCost },
+    })
+    await loadProducts() // 利益もサーバーで再計算されるので一覧を読み直す
+  }
+  catch {
+    errorMessage.value = '仕入れ値の更新に失敗しました'
+  }
+}
+
+// -------------------------------------------------------
 // 商品削除：確認してから削除し、一覧を読み直す
 // -------------------------------------------------------
 async function deleteProduct(asin: string, name: string) {
@@ -267,7 +307,34 @@ const columns: TableColumn<Product>[] = [
   {
     accessorKey: 'costPrice',
     header: '仕入れ値',
-    cell: ({ row }) => `¥${row.getValue<number>('costPrice').toLocaleString()}`,
+    cell: ({ row }) => {
+      const product = row.original
+      // 編集中はこの商品だけ入力欄を表示
+      if (editingAsin.value === product.asin) {
+        return h('input', {
+          id: `cost-input-${product.asin}`,
+          type: 'number',
+          value: editingValue.value,
+          min: 0,
+          class: 'w-24 px-2 py-1 border border-orange-400 rounded text-sm',
+          onInput: (e: Event) => { editingValue.value = Number((e.target as HTMLInputElement).value) },
+          onBlur: () => saveCost(product),
+          onKeydown: (e: KeyboardEvent) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur() // Enterで保存（blurに委ねる）
+            if (e.key === 'Escape') editingAsin.value = null // Escでキャンセル
+          },
+        })
+      }
+      // 通常表示：クリックで編集開始。0円（未入力）は目立たせる
+      return h('span', {
+        class: `cursor-pointer hover:underline inline-flex items-center gap-1 ${product.costPrice === 0 ? 'text-orange-500 font-semibold' : ''}`,
+        title: 'クリックして仕入れ値を編集',
+        onClick: () => startEditCost(product),
+      }, [
+        `¥${product.costPrice.toLocaleString()}`,
+        h('span', { class: 'text-xs text-gray-400' }, '✎'),
+      ])
+    },
   },
   {
     accessorKey: 'profit',
