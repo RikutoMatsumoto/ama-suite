@@ -34,16 +34,16 @@ import {
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
 // 親コンポーネント（dashboard.vue）から受け取るデータ
+// profitはAmazon実データモードでは算出できないため省略可能（線ごと非表示）
 const props = defineProps<{
   labels: string[]
   sales: number[]
-  profit: number[]
+  profit?: number[] | null
 }>()
 
 // グラフのデータ定義（propsが変わったら自動で再描画されるようcomputedに）
-const chartData = computed(() => ({
-  labels: props.labels,
-  datasets: [
+const chartData = computed(() => {
+  const datasets: object[] = [
     {
       label: '売上',
       data: props.sales,
@@ -53,16 +53,21 @@ const chartData = computed(() => ({
       tension: 0.3, // 線を少し滑らかに
       pointRadius: 2,
     },
-    {
+  ]
+
+  if (props.profit) {
+    datasets.push({
       label: '利益',
       data: props.profit,
       borderColor: '#22C55E', // 利益はグリーン
       backgroundColor: 'transparent',
       tension: 0.3,
       pointRadius: 2,
-    },
-  ],
-}))
+    })
+  }
+
+  return { labels: props.labels, datasets }
+})
 
 const chartOptions = {
   responsive: true,

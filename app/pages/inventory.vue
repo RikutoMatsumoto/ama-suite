@@ -1,5 +1,60 @@
 <template>
   <div class="space-y-4">
+    <!-- ================================================== -->
+    <!-- Amazon FBA実在庫（SP-API・オーナーアカウントのみ表示） -->
+    <!-- ================================================== -->
+    <UCard v-if="fbaData">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold flex items-center gap-2">
+            <UIcon name="i-lucide-warehouse" />
+            Amazon FBA実在庫
+            <UBadge label="SP-API" color="success" variant="subtle" size="sm" />
+          </h2>
+          <UButton
+            icon="i-lucide-refresh-cw"
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            :loading="fbaLoading"
+            @click="loadFbaInventory(true)"
+          />
+        </div>
+      </template>
+
+      <!-- サマリー -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+        <div>
+          <p class="text-xs text-gray-500">総在庫数</p>
+          <p class="text-xl font-bold">{{ fbaData.summary.totalUnits.toLocaleString() }}個</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">在庫ありSKU</p>
+          <p class="text-xl font-bold">{{ fbaData.summary.activeSkus }}件</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">納品中</p>
+          <p class="text-xl font-bold">{{ fbaData.summary.inboundUnits.toLocaleString() }}個</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">全SKU（直近1年）</p>
+          <p class="text-xl font-bold text-gray-400">{{ fbaData.summary.allSkus }}件</p>
+        </div>
+      </div>
+
+      <!-- FBA在庫テーブル -->
+      <UTable :data="fbaData.items" :columns="fbaColumns" />
+      <p v-if="fbaData.items.length === 0" class="text-center text-sm text-gray-400 py-4">
+        現在、在庫あり・納品中のSKUはありません。
+      </p>
+      <p class="text-right text-xs text-gray-400 mt-2">
+        最終更新: {{ formatFbaDate(fbaData.updatedAt) }}（15分キャッシュ）
+      </p>
+    </UCard>
+
+    <!-- ================================================== -->
+    <!-- 手動の在庫管理（従来機能） -->
+    <!-- ================================================== -->
     <!-- 在庫サマリー -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <UCard>
@@ -54,6 +109,88 @@ const products = ref<Product[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
 
+// -------------------------------------------------------
+// Amazon FBA実在庫（SP-API）
+// オーナーアカウント以外は403が返るので、その場合はセクションごと非表示
+// -------------------------------------------------------
+type FbaItem = {
+  asin: string
+  sku: string
+  productName: string
+  total: number
+  fulfillable: number
+  inbound: number
+  reserved: number
+}
+
+interface FbaData {
+  items: FbaItem[]
+  summary: { allSkus: number, activeSkus: number, totalUnits: number, inboundUnits: number }
+  updatedAt: string
+}
+
+const fbaData = ref<FbaData | null>(null)
+const fbaLoading = ref(false)
+
+async function loadFbaInventory(refresh = false) {
+  fbaLoading.value = true
+  try {
+    fbaData.value = await $fetch<FbaData>('/api/spapi/inventory', {
+      query: refresh ? { refresh: '1' } : {},
+      headers: await authHeaders(),
+    })
+  }
+  catch {
+    // 403（オーナー以外）や未設定の場合は何も表示しない
+    fbaData.value = null
+  }
+  finally {
+    fbaLoading.value = false
+  }
+}
+
+function formatFbaDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+const fbaColumns: TableColumn<FbaItem>[] = [
+  {
+    accessorKey: 'productName',
+    header: '商品名',
+  },
+  {
+    accessorKey: 'asin',
+    header: 'ASIN',
+  },
+  {
+    accessorKey: 'fulfillable',
+    header: '販売可能',
+    cell: ({ row }) => h('span', { class: 'font-bold' }, `${row.getValue<number>('fulfillable')}個`),
+  },
+  {
+    accessorKey: 'inbound',
+    header: '納品中',
+    cell: ({ row }) => {
+      const n = row.getValue<number>('inbound')
+      return n > 0 ? h('span', { class: 'text-blue-600' }, `${n}個`) : '—'
+    },
+  },
+  {
+    accessorKey: 'reserved',
+    header: '予約済み',
+    cell: ({ row }) => {
+      const n = row.getValue<number>('reserved')
+      return n > 0 ? `${n}個` : '—'
+    },
+  },
+  {
+    accessorKey: 'total',
+    header: '合計',
+    cell: ({ row }) => `${row.getValue<number>('total')}個`,
+  },
+]
+
 // 集計（在庫サマリーカード用）
 const totalStock = computed(() => products.value.reduce((sum, p) => sum + (p.stock ?? 0), 0))
 const inStockCount = computed(() => products.value.filter(p => (p.stock ?? 0) > 0).length)
@@ -80,7 +217,10 @@ async function loadProducts() {
   }
 }
 
-onMounted(loadProducts)
+onMounted(() => {
+  loadProducts()
+  loadFbaInventory() // オーナーの場合のみFBA実在庫セクションが表示される
+})
 
 // -------------------------------------------------------
 // 在庫数の更新：+/-ボタンで増減し、PATCH APIに保存

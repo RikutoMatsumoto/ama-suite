@@ -1,12 +1,11 @@
 // ============================================================
 // ダッシュボードKPI取得API（認可チェック付き・実データ集計）
 //
-// 【変更履歴】
-// 旧: 固定のダミー数値を返すだけだった
-// 新: ログインユーザーの商品データをFirestoreから集計して返す
-//
-// 売上・注文はAmazon SP-API連携後に実装予定のため、
-// 現時点で集計できる「登録商品数」「想定利益の合計」を返す。
+// 【売上の出どころは2系統】
+// ・オーナーアカウント … SP-APIのAmazon実注文から集計（source: 'amazon'）
+//   利益は手数料連携（財務会計ロール）が未実装のため null を返す
+//   （手動記録の想定利益と混ぜて嘘の数字を出さないための判断）
+// ・それ以外（デモ等） … 手動記録の注文から集計（source: 'manual'）
 // ============================================================
 
 export default defineEventHandler(async (event) => {
@@ -35,6 +34,31 @@ export default defineEventHandler(async (event) => {
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
+  // -------------------------------------------------------
+  // オーナーはAmazon実注文から集計
+  // -------------------------------------------------------
+  if (await isSpApiOwner(uid)) {
+    const amazon = await fetchAmazonOrders(uid)
+    // 今月分（キャンセル除く）の売上を合算
+    // ※取得ウィンドウは直近30日なので、31日ある月の1日分だけ端が欠ける可能性あり
+    const monthlySales = amazon.orders
+      .filter(o => o.status !== 'Canceled' && o.purchaseDate >= monthStart)
+      .reduce((sum, o) => sum + (o.total ?? 0), 0)
+
+    return {
+      monthlySales,
+      monthlyProfit: null, // 手数料連携（財務会計ロール）までは算出しない
+      totalExpectedProfit,
+      productCount: snap.size,
+      outOfStockCount,
+      source: 'amazon',
+      updatedAt: new Date().toISOString(),
+    }
+  }
+
+  // -------------------------------------------------------
+  // それ以外は手動記録の注文から集計（従来どおり）
+  // -------------------------------------------------------
   const ordersSnap = await adminFirestore()
     .collection('users').doc(uid)
     .collection('orders')
@@ -55,6 +79,7 @@ export default defineEventHandler(async (event) => {
     totalExpectedProfit, // 登録商品の想定利益合計
     productCount: snap.size, // 登録商品数
     outOfStockCount, // 在庫切れ商品数
+    source: 'manual',
     updatedAt: new Date().toISOString(),
   }
 })

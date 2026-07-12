@@ -13,6 +13,11 @@ export default defineNuxtConfig({
     stripeSecretKey: '',
     stripeWebhookSecret: '',
     keepaApiKey: '',
+    // Amazon SP-API（.env の NUXT_SPAPI_* が自動で入る）
+    spapiClientId: '', // LWAクライアントID（amzn1.application-oa2-client.xxx）
+    spapiClientSecret: '', // LWAクライアントシークレット
+    spapiRefreshToken: '', // セルフ認可で発行したリフレッシュトークン（Atzr|xxx）
+    spapiOwnerEmail: '', // 実データを見られる唯一のアカウントのメールアドレス
     public: {
       apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3001',
       // Firebase設定（.envから読み込む）

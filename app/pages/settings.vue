@@ -18,16 +18,58 @@
           <span class="text-sm text-gray-600">契約プラン</span>
           <UBadge :label="planLabel" :color="planColor" variant="subtle" />
         </div>
+        <!-- プランの制限内容（何ができるプランなのかをその場で確認できる） -->
+        <div v-if="planInfo" class="flex justify-between items-center py-2 border-t">
+          <span class="text-sm text-gray-600">プランの内容</span>
+          <span class="text-sm text-gray-500">
+            商品登録 {{ planInfo.maxProducts ? `${planInfo.maxProducts}件まで` : '無制限' }}
+            ・グラフ {{ planInfo.maxHistoryDays === 365 ? '1年分' : `${planInfo.maxHistoryDays}日分` }}
+          </span>
+        </div>
       </div>
     </UCard>
 
-    <!-- 今後の設定項目 -->
+    <!-- SP-API連携ステータス -->
     <UCard>
       <template #header>
-        <h2 class="font-semibold">その他の設定</h2>
+        <div class="flex items-center gap-2">
+          <UIcon name="i-lucide-plug-zap" />
+          <h2 class="font-semibold">Amazon SP-API連携</h2>
+          <UBadge
+            v-if="spapiStatus?.connected"
+            label="接続済み"
+            color="success"
+            variant="subtle"
+            size="sm"
+          />
+          <UBadge
+            v-else-if="spapiStatus"
+            label="未接続"
+            color="neutral"
+            variant="subtle"
+            size="sm"
+          />
+        </div>
       </template>
-      <p class="text-sm text-gray-500 py-4 text-center">
-        通知設定・API連携（Amazon SP-API / Keepa）などの設定項目は準備中です。
+      <div v-if="!spapiStatus" class="text-sm text-gray-400 py-2 text-center">
+        接続状態を確認中...
+      </div>
+      <div v-else-if="spapiStatus.connected" class="space-y-2">
+        <p class="text-sm text-gray-600">
+          セラーアカウントと接続されています。参加マーケットプレイス：
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <UBadge
+            v-for="m in spapiStatus.marketplaces"
+            :key="m.id"
+            :label="`${m.name} (${m.country})`"
+            color="neutral"
+            variant="subtle"
+          />
+        </div>
+      </div>
+      <p v-else class="text-sm text-gray-500 py-2">
+        {{ spapiStatus.reason }}
       </p>
     </UCard>
   </div>
@@ -38,34 +80,46 @@ definePageMeta({ layout: 'default' })
 
 const authStore = useAuthStore()
 
-// 契約状態をAPIから取得（Stripe決済後にFirestoreに保存されたもの）
-const subscription = ref<{ status?: string, plan?: string } | null>(null)
+// プラン情報（トライアル判定込み）をAPIから取得
+const { planInfo, loadPlan } = usePlan()
+onMounted(() => loadPlan(true)) // 設定画面は最新状態を見たいので強制再取得
+
+// -------------------------------------------------------
+// SP-API接続状態の確認
+// -------------------------------------------------------
+interface SpApiStatus {
+  connected: boolean
+  reason?: string
+  marketplaces?: { id: string, name: string, country: string }[]
+}
+
+const spapiStatus = ref<SpApiStatus | null>(null)
 
 onMounted(async () => {
   try {
     const token = await authStore.getIdToken()
-    subscription.value = await $fetch('/api/billing/subscription', {
+    spapiStatus.value = await $fetch<SpApiStatus>('/api/spapi/status', {
       headers: { Authorization: `Bearer ${token}` },
     })
   }
   catch {
-    // 未契約なら null のまま
+    spapiStatus.value = { connected: false, reason: '接続状態の確認に失敗しました' }
   }
 })
 
 const planLabel = computed(() => {
-  if (subscription.value?.status === 'active') {
-    const names: Record<string, string> = {
-      starter: 'スタータープラン',
-      standard: 'スタンダードプラン',
-      pro: 'プロプラン',
-    }
-    return names[subscription.value.plan ?? ''] ?? '契約中'
+  if (!planInfo.value) return '確認中...'
+  if (planInfo.value.status === 'trial') {
+    return `無料トライアル（残り${planInfo.value.trialDaysLeft}日）`
   }
-  return '無料プラン'
+  return planInfo.value.label
 })
 
-const planColor = computed(() =>
-  subscription.value?.status === 'active' ? 'primary' as const : 'neutral' as const,
-)
+const planColor = computed(() => {
+  switch (planInfo.value?.status) {
+    case 'active': return 'primary' as const
+    case 'trial': return 'warning' as const
+    default: return 'neutral' as const
+  }
+})
 </script>

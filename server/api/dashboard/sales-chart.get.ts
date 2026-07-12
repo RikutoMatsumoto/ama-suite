@@ -20,6 +20,33 @@ export default defineEventHandler(async (event) => {
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)
 
+  // -------------------------------------------------------
+  // オーナーはAmazon実注文から日別売上を集計
+  // （利益は手数料連携までは出せないので null を返す）
+  // -------------------------------------------------------
+  if (await isSpApiOwner(uid)) {
+    const amazon = await fetchAmazonOrders(uid)
+
+    const salesByDay = new Map<string, number>()
+    for (const order of amazon.orders) {
+      if (order.status === 'Canceled' || order.total === null) continue
+      const d = new Date(order.purchaseDate)
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+      salesByDay.set(key, (salesByDay.get(key) ?? 0) + order.total)
+    }
+
+    const labels: string[] = []
+    const sales: number[] = []
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+      labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
+      sales.push(salesByDay.get(key) ?? 0)
+    }
+
+    return { labels, sales, profit: null, source: 'amazon' }
+  }
+
   const snap = await adminFirestore()
     .collection('users').doc(uid)
     .collection('orders')
@@ -54,5 +81,5 @@ export default defineEventHandler(async (event) => {
     profit.push(day?.profit ?? 0)
   }
 
-  return { labels, sales, profit }
+  return { labels, sales, profit, source: 'manual' }
 })

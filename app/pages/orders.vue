@@ -1,5 +1,57 @@
 <template>
   <div class="space-y-4">
+    <!-- ================================================== -->
+    <!-- Amazon実注文（SP-API・オーナーアカウントのみ表示） -->
+    <!-- ================================================== -->
+    <UCard v-if="amazonData">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold flex items-center gap-2">
+            <UIcon name="i-lucide-shopping-cart" />
+            Amazon実注文（直近{{ amazonData.summary.days }}日）
+            <UBadge label="SP-API" color="success" variant="subtle" size="sm" />
+          </h2>
+          <UButton
+            icon="i-lucide-refresh-cw"
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            :loading="amazonLoading"
+            @click="loadAmazonOrders(true)"
+          />
+        </div>
+      </template>
+
+      <!-- サマリー -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+        <div>
+          <p class="text-xs text-gray-500">売上合計</p>
+          <p class="text-xl font-bold">¥{{ amazonData.summary.totalSales.toLocaleString() }}</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">注文数</p>
+          <p class="text-xl font-bold">{{ amazonData.summary.orderCount }}件</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">保留中</p>
+          <p class="text-xl font-bold">{{ amazonData.summary.pendingCount }}件</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500">キャンセル</p>
+          <p class="text-xl font-bold text-gray-400">{{ amazonData.summary.canceledCount }}件</p>
+        </div>
+      </div>
+
+      <!-- 実注文テーブル -->
+      <UTable :data="amazonData.orders" :columns="amazonColumns" />
+      <p class="text-right text-xs text-gray-400 mt-2">
+        最終更新: {{ formatDate(amazonData.updatedAt) }}（15分キャッシュ）
+      </p>
+    </UCard>
+
+    <!-- ================================================== -->
+    <!-- 手動の注文記録（従来機能） -->
+    <!-- ================================================== -->
     <!-- 操作バー -->
     <div class="flex items-center justify-end">
       <UButton icon="i-lucide-plus" label="注文を記録" @click="showAddModal = true" />
@@ -49,12 +101,106 @@
 </template>
 
 <script setup lang="ts">
-import { h } from 'vue'
+import { h, resolveComponent } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
 
 definePageMeta({ layout: 'default' })
 
 const authStore = useAuthStore()
+
+// -------------------------------------------------------
+// Amazon実注文（SP-API）
+// オーナーアカウント以外は403が返るので、その場合はセクションごと非表示
+// -------------------------------------------------------
+type AmazonOrder = {
+  orderId: string
+  purchaseDate: string
+  status: string
+  total: number | null
+  itemCount: number
+  fulfillment: string
+}
+
+interface AmazonOrdersData {
+  orders: AmazonOrder[]
+  summary: {
+    days: number
+    orderCount: number
+    totalSales: number
+    itemCount: number
+    pendingCount: number
+    canceledCount: number
+  }
+  updatedAt: string
+}
+
+const amazonData = ref<AmazonOrdersData | null>(null)
+const amazonLoading = ref(false)
+
+async function loadAmazonOrders(refresh = false) {
+  amazonLoading.value = true
+  try {
+    amazonData.value = await $fetch<AmazonOrdersData>('/api/spapi/orders', {
+      query: refresh ? { refresh: '1' } : {},
+      headers: await authHeaders(),
+    })
+  }
+  catch {
+    // 403（オーナー以外）や未設定の場合は何も表示しない
+    amazonData.value = null
+  }
+  finally {
+    amazonLoading.value = false
+  }
+}
+
+// 注文ステータスの日本語表示とバッジ色
+const statusLabels: Record<string, { label: string, color: 'success' | 'warning' | 'neutral' | 'error' }> = {
+  Shipped: { label: '発送済み', color: 'success' },
+  Pending: { label: '保留中', color: 'warning' },
+  Unshipped: { label: '未発送', color: 'warning' },
+  PartiallyShipped: { label: '一部発送', color: 'warning' },
+  Canceled: { label: 'キャンセル', color: 'neutral' },
+}
+
+const UBadge = resolveComponent('UBadge')
+
+const amazonColumns: TableColumn<AmazonOrder>[] = [
+  {
+    accessorKey: 'purchaseDate',
+    header: '注文日時',
+    cell: ({ row }) => formatDate(row.getValue<string>('purchaseDate')),
+  },
+  {
+    accessorKey: 'orderId',
+    header: '注文番号',
+  },
+  {
+    accessorKey: 'status',
+    header: '状態',
+    cell: ({ row }) => {
+      const s = statusLabels[row.getValue<string>('status')] ?? { label: row.getValue<string>('status'), color: 'neutral' as const }
+      return h(UBadge, { label: s.label, color: s.color, variant: 'subtle', size: 'sm' })
+    },
+  },
+  {
+    accessorKey: 'fulfillment',
+    header: '配送',
+  },
+  {
+    accessorKey: 'itemCount',
+    header: '商品数',
+    cell: ({ row }) => `${row.getValue<number>('itemCount')}点`,
+  },
+  {
+    accessorKey: 'total',
+    header: '合計',
+    cell: ({ row }) => {
+      const total = row.getValue<number | null>('total')
+      return total === null ? '—' : `¥${total.toLocaleString()}`
+    },
+  },
+]
 
 type Order = {
   id: string
@@ -116,6 +262,7 @@ async function loadProducts() {
 onMounted(() => {
   loadOrders()
   loadProducts()
+  loadAmazonOrders() // オーナーの場合のみ実注文セクションが表示される
 })
 
 async function addOrder() {

@@ -3,7 +3,16 @@
 
     <!-- ページタイトル -->
     <div>
-      <h2 class="text-2xl font-black" style="color: #1B2A4A;">ダッシュボード</h2>
+      <div class="flex items-center gap-3">
+        <h2 class="text-2xl font-black" style="color: #1B2A4A;">ダッシュボード</h2>
+        <!-- オーナーアカウントでは売上・注文がAmazonの実データになる -->
+        <UBadge
+          v-if="summary?.source === 'amazon'"
+          label="Amazon実データ"
+          color="success"
+          variant="subtle"
+        />
+      </div>
       <p class="text-sm text-gray-500 mt-1">AmaSuite へようこそ。ビジネスの状況を一目で確認できます。</p>
     </div>
 
@@ -110,11 +119,13 @@
         />
       </div>
       <div class="p-4">
-        <div v-if="recentOrders.length === 0" class="flex flex-col items-center justify-center py-12 text-gray-300 gap-3">
+        <!-- オーナーはAmazon実注文、それ以外は手動記録の注文を表示 -->
+        <UTable v-if="amazonRecent.length > 0" :data="amazonRecent" :columns="amazonOrderColumns" />
+        <UTable v-else-if="recentOrders.length > 0" :data="recentOrders" :columns="orderColumns" />
+        <div v-else class="flex flex-col items-center justify-center py-12 text-gray-300 gap-3">
           <UIcon name="i-lucide-shopping-bag" class="text-5xl" />
           <p class="text-sm text-gray-400">注文データはAPIと接続後に表示されます</p>
         </div>
-        <UTable v-else :data="recentOrders" :columns="orderColumns" />
       </div>
     </div>
 
@@ -133,10 +144,11 @@ const authStore = useAuthStore()
 
 interface Summary {
   monthlySales: number
-  monthlyProfit: number
+  monthlyProfit: number | null // Amazon実データモードでは手数料連携までnull
   totalExpectedProfit: number
   productCount: number
   outOfStockCount: number
+  source?: 'amazon' | 'manual'
 }
 
 interface Order {
@@ -151,12 +163,22 @@ interface Order {
 interface ChartData {
   labels: string[]
   sales: number[]
-  profit: number[]
+  profit: number[] | null // Amazon実データモードではnull（利益線なし）
 }
 
 const summary = ref<Summary | null>(null)
 const recentOrders = ref<Order[]>([])
 const chart = ref<ChartData | null>(null)
+
+// Amazon実注文（オーナーのみ。403なら空のまま=手動記録を表示）
+interface AmazonOrder {
+  orderId: string
+  purchaseDate: string
+  status: string
+  total: number | null
+  fulfillment: string
+}
+const amazonRecent = ref<AmazonOrder[]>([])
 
 // グラフに描く意味のあるデータ（売上が1日でもある）が存在するか
 const hasOrders = computed(() => chart.value?.sales.some(v => v > 0) ?? false)
@@ -176,6 +198,12 @@ onMounted(async () => {
     summary.value = summaryRes
     recentOrders.value = ordersRes.orders.slice(0, 5) // 直近5件だけ表示
     chart.value = chartRes
+
+    // オーナーならAmazon実注文も取得（オーナー以外は403で空のまま）
+    if (summaryRes.source === 'amazon') {
+      const amazonRes = await $fetch<{ orders: AmazonOrder[] }>('/api/spapi/orders', { headers })
+      amazonRecent.value = amazonRes.orders.slice(0, 5)
+    }
   }
   catch {
     // 取得失敗時は0のまま表示
@@ -193,7 +221,11 @@ const kpiCards = computed(() => [
   },
   {
     label: '今月の利益',
-    value: `¥${(summary.value?.monthlyProfit ?? 0).toLocaleString()}`,
+    // Amazon実データモードでは手数料を引いた本当の利益がまだ出せないため「—」
+    // （手動記録の想定利益と混ぜて不正確な数字を出さない）
+    value: summary.value?.monthlyProfit === null
+      ? '—'
+      : `¥${(summary.value?.monthlyProfit ?? 0).toLocaleString()}`,
     change: 0,
     icon: 'i-lucide-circle-dollar-sign',
     bgColor: '#F0FDF4',
@@ -247,6 +279,39 @@ const orderColumns = [
     accessorKey: 'profit',
     header: '利益',
     cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => `¥${row.getValue<number>('profit').toLocaleString()}`,
+  },
+]
+
+// Amazon実注文用の列（注文管理ページと同じステータス表記）
+const amazonStatusLabels: Record<string, string> = {
+  Shipped: '発送済み',
+  Pending: '保留中',
+  Unshipped: '未発送',
+  PartiallyShipped: '一部発送',
+  Canceled: 'キャンセル',
+}
+
+const amazonOrderColumns = [
+  {
+    accessorKey: 'purchaseDate',
+    header: '日時',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => formatDate(row.getValue<string>('purchaseDate')),
+  },
+  { accessorKey: 'orderId', header: '注文番号' },
+  {
+    accessorKey: 'status',
+    header: '状態',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) =>
+      amazonStatusLabels[row.getValue<string>('status')] ?? row.getValue<string>('status'),
+  },
+  { accessorKey: 'fulfillment', header: '配送' },
+  {
+    accessorKey: 'total',
+    header: '売上',
+    cell: ({ row }: { row: { getValue: <T>(key: string) => T } }) => {
+      const total = row.getValue<number | null>('total')
+      return total === null ? '—' : `¥${total.toLocaleString()}`
+    },
   },
 ]
 </script>
