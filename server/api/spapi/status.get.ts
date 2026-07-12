@@ -25,14 +25,17 @@ interface MarketplaceParticipations {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireAuth(event)
+  const uid = await requireAuth(event)
+
+  // このユーザーが実データ機能（取り込みボタン等）を使えるか
+  const owner = await isSpApiOwner(uid)
 
   const config = useRuntimeConfig()
   const configured = Boolean(
     config.spapiClientId && config.spapiClientSecret && config.spapiRefreshToken,
   )
   if (!configured) {
-    return { connected: false, reason: '認証情報が未設定です（.envのNUXT_SPAPI_*）' }
+    return { connected: false, owner, reason: '認証情報が未設定です（.envのNUXT_SPAPI_*）' }
   }
 
   try {
@@ -49,6 +52,7 @@ export default defineEventHandler(async (event) => {
 
     return {
       connected: true,
+      owner,
       marketplaces,
       joinedJapan: marketplaces.some(m => m.id === JP_MARKETPLACE_ID),
     }
@@ -57,6 +61,7 @@ export default defineEventHandler(async (event) => {
     const fetchError = err as { status?: number, statusMessage?: string, message?: string }
     return {
       connected: false,
+      owner,
       reason: `SP-API呼び出しに失敗しました（${fetchError.status ?? '?'}）: ${fetchError.statusMessage ?? fetchError.message ?? '不明なエラー'}`,
     }
   }

@@ -8,6 +8,16 @@
         <span v-if="planInfo?.maxProducts" class="text-sm text-gray-500">
           登録数 {{ products.length }} / {{ planInfo.maxProducts }}件
         </span>
+        <!-- Amazon取り込み（SP-APIオーナーのみ表示） -->
+        <UButton
+          v-if="isSpApiOwner"
+          icon="i-lucide-download"
+          label="Amazonから取り込み"
+          color="neutral"
+          variant="outline"
+          :loading="importing"
+          @click="importFromAmazon"
+        />
         <UButton
           icon="i-lucide-plus"
           label="商品を追加"
@@ -17,6 +27,14 @@
         />
       </div>
     </div>
+
+    <!-- 取り込み結果メッセージ -->
+    <UAlert
+      v-if="importMessage"
+      color="success"
+      variant="subtle"
+      :description="importMessage"
+    />
 
     <!-- エラーメッセージ -->
     <UAlert
@@ -95,6 +113,49 @@ const isAtLimit = computed(() => {
   const max = planInfo.value?.maxProducts
   return max !== null && max !== undefined && products.value.length >= max
 })
+
+// -------------------------------------------------------
+// Amazonからの商品取り込み（SP-APIオーナーのみ）
+// FBA在庫にある商品を、価格・在庫数付きで商品管理に一括登録する
+// -------------------------------------------------------
+const isSpApiOwner = ref(false)
+const importing = ref(false)
+const importMessage = ref('')
+
+onMounted(async () => {
+  try {
+    const res = await $fetch<{ owner: boolean }>('/api/spapi/status', {
+      headers: await authHeaders(),
+    })
+    isSpApiOwner.value = res.owner
+  }
+  catch {
+    // 確認できなければボタンを出さないだけ
+  }
+})
+
+async function importFromAmazon() {
+  importing.value = true
+  errorMessage.value = ''
+  importMessage.value = ''
+  try {
+    const res = await $fetch<{ importedCount: number, skippedCount: number }>('/api/spapi/import-products', {
+      method: 'POST',
+      headers: await authHeaders(),
+    })
+    importMessage.value = res.importedCount > 0
+      ? `Amazonから${res.importedCount}件の商品を取り込みました（登録済みスキップ: ${res.skippedCount}件）。仕入れ値は0円で登録されるので、利益を正しく出すには各商品で入力してください`
+      : `新しく取り込める商品はありませんでした（登録済みスキップ: ${res.skippedCount}件）`
+    await loadProducts()
+  }
+  catch (err: unknown) {
+    const fetchError = err as { data?: { statusMessage?: string } }
+    errorMessage.value = fetchError.data?.statusMessage ?? 'Amazonからの取り込みに失敗しました'
+  }
+  finally {
+    importing.value = false
+  }
+}
 
 // -------------------------------------------------------
 // 検索：入力に応じてクライアント側で絞り込む
